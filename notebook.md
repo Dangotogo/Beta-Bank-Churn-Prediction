@@ -370,9 +370,6 @@ target_test = data_test['Exited']
 ```python
 #investigating to see if the variable distribution is balance
 print(data['Exited'].value_counts(normalize=True) * 100) 
-
-#since the result is ~80/20 indicating variable is imbalanced 
-model = RandomForestClassifier()
 ```
 
     0    79.63
@@ -380,7 +377,10 @@ model = RandomForestClassifier()
     Name: Exited, dtype: float64
 
 
+The finding indicating that our target class have an imbalance distribution, which can be probablematic to our training model and prediction  
+
 ### Train baseline model
+this training purpose is to show how imbalance target distribution could affect the training model
 
 
 ```python
@@ -432,15 +432,16 @@ AUC-ROC score is strong performance at ranking churn vs non-churn.
 ```python
 
 # Logistic Regression with balanced class weights
-lr_balance = LogisticRegression(random_state=12345, max_iter=1000, class_weight="balanced")
+lr_balance = LogisticRegression(random_state=12345, class_weight="balanced")
 f1_lr_bal, auc_lr_bal = evaluate_model(lr_balance, features_train, target_train, features_valid, target_valid)
+
 print("Logistic Regression (balanced) -> F1:", f1_lr_bal, " | AUC-ROC:", auc_lr_bal)
 
 # Random Forest with balanced class weights
-rf_bal = RandomForestClassifier(random_state=12345, n_estimators=100, class_weight="balanced")
-f1_rf_bal, auc_rf_bal = evaluate_model(rf_bal, features_train, target_train, features_valid, target_valid)
-print("Random Forest (balanced) -> F1:", f1_rf_bal, " | AUC-ROC:", auc_rf_bal)
+rf_balance = RandomForestClassifier(random_state=12345, class_weight="balanced")
+f1_rf_bal, auc_rf_bal = evaluate_model(rf_balance, features_train, target_train, features_valid, target_valid)
 
+print("Random Forest (balanced) -> F1:", f1_rf_bal, " | AUC-ROC:", auc_rf_bal)
 
 ```
 
@@ -448,73 +449,70 @@ print("Random Forest (balanced) -> F1:", f1_rf_bal, " | AUC-ROC:", auc_rf_bal)
     Random Forest (balanced) -> F1: 0.5480769230769231  | AUC-ROC: 0.8498033340467526
 
 
+The result show a better distribution but yet still not meet the goal that we're looking for
+In this case we have to upsampling the minor classes 
+
+#### Upsampling data
+
 
 ```python
-#upsampling
 # Combine features + target for upsampling
 train_upsampled = pd.concat([features_train, target_train], axis=1)
 
 # Separate classes
-churned = train_upsampled[train_upsampled['Exited'] == 1]
-not_churned = train_upsampled[train_upsampled['Exited'] == 0]
+exited = train_upsampled[train_upsampled['Exited'] == 1]
+not_exited = train_upsampled[train_upsampled['Exited'] == 0]
 
-# Upsample churned customers
-churned_upsampled = resample(churned, replace=True, n_samples=len(not_churned), random_state=12345)
+# Upsample exited customers
+exited_upsampled = resample(exited, replace=True, n_samples=len(not_exited), random_state=12345)
 
 # New balanced training set
-upsampled = pd.concat([not_churned, churned_upsampled])
+upsampled = pd.concat([not_exited, exited_upsampled])
 
 features_train_upsampled = upsampled.drop('Exited', axis=1)
 target_train_upsampled = upsampled['Exited']
 
+```
+
+#### Training upsampled data with two models
+
+
+```python
+# Train Logistic Regression on upsampled data
+lr_upsampled = LogisticRegression(random_state=12345)
+lr_upsampled.fit(features_train_upsampled, target_train_upsampled)
+
+pred_valid_upsampled_lr = lr_upsampled.predict(features_valid)
+proba_valid_upsampled_lr = lr_upsampled.predict_proba(features_valid)[:, 1]
+
+print("Logistic Regression F1 score (upsampled):", f1_score(target_valid, pred_valid_upsampled_lr), 
+      " , AUC-ROC score:", roc_auc_score(target_valid, proba_valid_upsampled_lr))
+
+
 # Train Random Forest on upsampled data
-rf_upsampled = RandomForestClassifier(random_state=12345, n_estimators=100)
+rf_upsampled = RandomForestClassifier(random_state=12345)
 rf_upsampled.fit(features_train_upsampled, target_train_upsampled)
 
 pred_valid_upsampled = rf_upsampled.predict(features_valid)
 proba_valid_upsampled = rf_upsampled.predict_proba(features_valid)[:, 1]
 
-print("Random Forest (upsampled) -> F1:", f1_score(target_valid, pred_valid_upsampled), 
-      " | AUC-ROC:", roc_auc_score(target_valid, proba_valid_upsampled))
-```
-
-    Random Forest (upsampled) -> F1: 0.6042105263157895  | AUC-ROC: 0.8445497134432
-
-
-
-```python
-#final test 
-# combine train + valid
-features_final = pd.concat([features_train, features_valid])
-target_final = pd.concat([target_train, target_valid])
-
-# upsample again
-train_all = pd.concat([features_final, target_final], axis=1)
-minor = train_all[train_all['Exited'] == 1]
-major = train_all[train_all['Exited'] == 0]
-
-minor_up = resample(minor, replace=True, n_samples=len(major), random_state=12345)
-upsampled = pd.concat([major, minor_up])
-
-features_final_up = upsampled.drop('Exited', axis=1)
-target_final_up = upsampled['Exited']
-
-# train final model
-rf_final = RandomForestClassifier(random_state=12345, n_estimators=100)
-rf_final.fit(features_final_up, target_final_up)
-
-# test evaluation
-pred_test = rf_final.predict(features_test)
-proba_test = rf_final.predict_proba(features_test)[:, 1]
-
-print("FINAL TEST -> F1:", f1_score(target_test, pred_test),
-      " | AUC-ROC:", roc_auc_score(target_test, proba_test))
-```
-
-    FINAL TEST -> F1: 0.9917355371900827  | AUC-ROC: 0.9990947949219187
-
-
-
-```python
+print("Random Forest F1 score (upsampled):", f1_score(target_valid, pred_valid_upsampled), 
+      " , AUC-ROC score:", roc_auc_score(target_valid, proba_valid_upsampled))
 
 ```
+
+    Logistic Regression F1 score (upsampled): 0.4559457794208256  , AUC-ROC score: 0.7108863047252146
+    Random Forest F1 score (upsampled): 0.6042105263157895  , AUC-ROC score: 0.8445497134432
+
+
+### Conclusion
+
+
+
+After testing two models to find which is better in predicting customer exiting, here's my conclusion: 
+##### Logistic Regression 
+Even with upsampling, only reached an F1 score of 0.46, showing it struggled with the churn problem. 
+##### Random Forest 
+the model performed much better, achieving an F1 score of 0.60 and an AUC-ROC of 0.85, which meets the project goal.
+
+This means Random Forest is better at finding patterns in the data and can identify customers likely to leave with stronger accuracy. Overall, handling class imbalance and using a tree-based model were key to improving predictions and creating a useful tool for customer retention.
